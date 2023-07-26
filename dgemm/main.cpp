@@ -1,7 +1,8 @@
-//Example: DGEMM usage.
+// Example: DGEMM usage.
 //-----------------------------------------------------------
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
+
 #include <iostream>
 
 int main() {
@@ -11,29 +12,30 @@ int main() {
   stat = cublasCreate(&handle);
 
   // Matrix A
-  float *a = 0;
-  float *devPtrA;
+  float* a = 0;
+  float* devPtrA;
   const int m = 6;
   const int n = 5;
-  a = (float *) malloc(m * n * sizeof(*a));
+  a = (float*)malloc(m * n * sizeof(*a));
   if (!a) {
     printf("host memory allocation failed");
     return EXIT_FAILURE;
   }
+  // cublas api数据布局是列优先，所以这里按列优先初始化
   for (int j = 1; j <= n; j++) {
     for (int i = 1; i <= m; i++) {
-      a[(j - 1) * m + (i - 1)] = (float) ((i - 1) * n + j);
+      a[(j - 1) * m + (i - 1)] = (float)((i - 1) * n + j);
     }
   }
-  // print a
+  // 按行优先打印矩阵a
   printf("a =\n");
-  for (int j = 1; j <= n; j++) {
-    for (int i = 1; i <= m; i++) {
+  for (int i = 1; i <= m; i++) {
+    for (int j = 1; j <= n; j++) {
       printf("%7.0f", a[(j - 1) * m + (i - 1)]);
     }
     printf("\n");
   }
-  cudaStat = cudaMalloc((void **) &devPtrA, m * n * sizeof(*a));
+  cudaStat = cudaMalloc((void**)&devPtrA, m * n * sizeof(*a));
   if (cudaStat != cudaSuccess) {
     printf("device memory allocation failed");
     return EXIT_FAILURE;
@@ -47,29 +49,30 @@ int main() {
   }
 
   // Matrix B
-  float *b = 0;
-  float *devPtrB;
+  float* b = 0;
+  float* devPtrB;
   const int m2 = 5;
   const int n2 = 3;
-  b = (float *) malloc(m2 * n2 * sizeof(*b));
+  b = (float*)malloc(m2 * n2 * sizeof(*b));
   if (!b) {
     printf("host memory allocation failed");
     return EXIT_FAILURE;
   }
+  // cublas api数据布局是列优先，所以这里按列优先初始化
   for (int j = 1; j <= n2; j++) {
     for (int i = 1; i <= m2; i++) {
-      b[(j - 1) * m2 + (i - 1)] = (float) ((i - 1) * n2 + j);
+      b[(j - 1) * m2 + (i - 1)] = (float)((i - 1) * n2 + j);
     }
   }
   // print b
   printf("b =\n");
-  for (int j = 1; j <= n2; j++) {
-    for (int i = 1; i <= m2; i++) {
+  for (int i = 1; i <= m2; i++) {
+    for (int j = 1; j <= n2; j++) {
       printf("%7.0f", b[(j - 1) * m2 + (i - 1)]);
     }
     printf("\n");
   }
-  cudaStat = cudaMalloc((void **) &devPtrB, m2 * n2 * sizeof(*b));
+  cudaStat = cudaMalloc((void**)&devPtrB, m2 * n2 * sizeof(*b));
   if (cudaStat != cudaSuccess) {
     printf("device memory allocation failed");
     cudaFree(devPtrA);
@@ -90,11 +93,11 @@ int main() {
   const int k3 = 5;
   const float alf = 1;
   const float bet = 1;
-  const float *alpha = &alf;
-  const float *beta = &bet;
-  float *c = 0;
-  float *devPtrC;
-  c = (float *) malloc(m3 * n3 * sizeof(*c));
+  const float* alpha = &alf;
+  const float* beta = &bet;
+  float* c = 0;
+  float* devPtrC;
+  c = (float*)malloc(m3 * n3 * sizeof(*c));
   if (!c) {
     printf("host memory allocation failed");
     return EXIT_FAILURE;
@@ -104,7 +107,7 @@ int main() {
       c[(j - 1) * m3 + (i - 1)] = 0;
     }
   }
-  cudaStat = cudaMalloc((void **) &devPtrC, m3 * n3 * sizeof(*c));
+  cudaStat = cudaMalloc((void**)&devPtrC, m3 * n3 * sizeof(*c));
   if (cudaStat != cudaSuccess) {
     printf("device memory allocation failed");
     cudaFree(devPtrA);
@@ -120,15 +123,6 @@ int main() {
     cudaFree(devPtrC);
     cublasDestroy(handle);
     return EXIT_FAILURE;
-  }
-
-  // print c after initialisation
-  printf("c initial =\n");
-  for (int j = 1; j <= n3; j++) {
-    for (int i = 1; i <= m3; i++) {
-      printf("%7.0f", c[(j - 1) * m3 + (i - 1)]);
-    }
-    printf("\n");
   }
 
   // C = A*B
@@ -155,8 +149,8 @@ int main() {
 
   // print c after Sgemm
   printf("c final =\n");
-  for (int j = 1; j <= n3; j++) {
-    for (int i = 1; i <= m3; i++) {
+  for (int i = 1; i <= m3; i++) {
+    for (int j = 1; j <= n3; j++) {
       printf("%7.0f", c[(j - 1) * m3 + (i - 1)]);
     }
     printf("\n");
