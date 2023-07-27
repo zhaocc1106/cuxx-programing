@@ -1,2 +1,2 @@
-# cublas-programing
-cublas learning
+# cuxx-programing
+一些cu库的demo，cublas、cublaslt、cusparse...
