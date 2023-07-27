@@ -3,7 +3,11 @@
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 
+#include <chrono>
 #include <iostream>
+
+#define GET_TIME_US() \
+  std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
 
 int main() {
   cudaError_t cudaStat;
@@ -88,9 +92,9 @@ int main() {
   }
 
   // dgemm
-  const int m3 = 6;
+  const int m3 = 5;
   const int n3 = 3;
-  const int k3 = 5;
+  const int k3 = 4;
   const float alf = 1;
   const float bet = 1;
   const float* alpha = &alf;
@@ -125,8 +129,13 @@ int main() {
     return EXIT_FAILURE;
   }
 
-  // C = A*B
-  stat = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m3, n3, k3, alpha, devPtrA, m, devPtrB, m2, beta, devPtrC, m3);
+  for (int i = 0; i < 5; i++) {
+    auto begin = GET_TIME_US();
+    // C = A*B
+    stat = cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, m3, n3, k3, alpha, devPtrA, m, devPtrB, m2, beta, devPtrC, m3);
+    auto end = GET_TIME_US();
+    printf("cublasSgemm time: %ld us\n", end - begin);
+  }
 
   if (stat != CUBLAS_STATUS_SUCCESS) {
     printf("cublasSgemm failed");

@@ -3,7 +3,9 @@
 
 #include <chrono>
 #include <cstdio>
-#include <thread>
+
+#define GET_TIME_US() \
+  std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count()
 
 int main() {
   cublasLtHandle_t handle;
@@ -15,6 +17,8 @@ int main() {
 
   // 设置矩阵A、B和C的维度
   int m = 5, n = 3, k = 4;
+  int lda = m, ldb = k, ldc = m;
+  float alpha = 1.0f, beta = 0.0f;
 
   // 分配设备内存并填充矩阵A、B
   float *d_A, *d_B, *d_C;
@@ -35,7 +39,21 @@ int main() {
   }
   cudaMemcpy(d_A, h_A, m * k * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemcpy(d_B, h_B, k * n * sizeof(float), cudaMemcpyHostToDevice);
+  cublasLtMatrixLayout_t a_desc, b_desc, c_desc;
+  cublasLtMatrixLayoutCreate(&a_desc, CUDA_R_32F, m, k, lda);
+  cublasLtMatrixLayoutCreate(&b_desc, CUDA_R_32F, k, n, ldb);
+  cublasLtMatrixLayoutCreate(&c_desc, CUDA_R_32F, m, n, ldc);
 
+  // 使用默认算法计算矩阵乘法
+  for (int i = 0; i < 5; i++) {
+    auto begin_us = GET_TIME_US();
+    cublasLtMatmul(handle, matmul_desc, &alpha, d_A, a_desc, d_B, b_desc, &beta, d_C, c_desc, d_C, c_desc, nullptr,
+                   nullptr, 0, nullptr);
+    auto end_us = GET_TIME_US();
+    printf("Not use algo, calc used time = %ld us\n", end_us - begin_us);
+  }
+
+  // 搜索最佳的矩阵乘法算法，它使用启发式算法来确定最适合给定矩阵维度和硬件配置的CUBLAS
   // 设置算法搜索的属性
   cublasLtMatmulPreference_t preference;
   cublasLtMatmulPreferenceCreate(&preference);
@@ -45,33 +63,26 @@ int main() {
   cudaMalloc(&workspace, workspace_size);
   cublasLtMatmulPreferenceSetAttribute(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace,
                                        workspace_size);
-
-  // 搜索最佳的矩阵乘法算法，它使用启发式算法来确定最适合给定矩阵维度和硬件配置的CUBLAS
   // LT算法
-  cublasLtMatrixLayout_t a_desc, b_desc, c_desc;
-  int lda = m, ldb = k, ldc = m;
-  cublasLtMatrixLayoutCreate(&a_desc, CUDA_R_32F, m, k, lda);
-  cublasLtMatrixLayoutCreate(&b_desc, CUDA_R_32F, k, n, ldb);
-  cublasLtMatrixLayoutCreate(&c_desc, CUDA_R_32F, m, n, ldc);
   int requested_algo_count = 10;
   cublasLtMatmulHeuristicResult_t heuristic_result[requested_algo_count];
+  auto algo_search_begin = GET_TIME_US();
   cublasLtMatmulAlgoGetHeuristic(handle, matmul_desc, a_desc, b_desc, c_desc, c_desc, preference, requested_algo_count,
                                  heuristic_result, &requested_algo_count);
-  printf("requested_algo_count = %d\n", requested_algo_count);
-  float alpha = 1.0f, beta = 0.0f;
+  auto algo_search_end = GET_TIME_US();
+  printf("algo search finished, requested_algo_count = %d, used time: %ld us.\n", requested_algo_count,
+         algo_search_end - algo_search_begin);
   for (int i = 0; i < requested_algo_count; i++) {
     printf("heuristic_result[%d].state = %d\n", i, heuristic_result[i].state);
     printf("heuristic_result[%d].wavesCount = %f\n", i, heuristic_result[i].wavesCount);
     printf("heuristic_result[%d].workspaceSize = %ld\n", i, heuristic_result[i].workspaceSize);
-    auto begin_us =
-      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
-    cublasLtMatmul(handle, matmul_desc, &alpha, d_A, a_desc, d_B, b_desc, &beta, d_C, c_desc, d_C, c_desc,
-                   &heuristic_result[i].algo, workspace, workspace_size, nullptr);
-    auto end_us =
-      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
-    printf("used time = %ld us\n", end_us - begin_us);
+    for (int j = 0; j < 5; j++) {
+      auto begin_us = GET_TIME_US();
+      cublasLtMatmul(handle, matmul_desc, &alpha, d_A, a_desc, d_B, b_desc, &beta, d_C, c_desc, d_C, c_desc,
+                     &heuristic_result[i].algo, workspace, workspace_size, nullptr);
+      auto end_us = GET_TIME_US();
+      printf("%d algo, calc used time = %ld us\n", i, end_us - begin_us);
+    }
     printf("-------------------------------------------\n");
   }
 
