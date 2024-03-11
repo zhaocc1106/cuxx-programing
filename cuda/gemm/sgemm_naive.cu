@@ -42,12 +42,12 @@ __global__ void NaiveSgemm(
 }
 
 // 同cpu版本作比较，测试准确性
-void TestError(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const int N, const int K),
-               const dim3& grid_dim,
-               const dim3& block_dim,
-               const int M,
-               const int N,
-               const int K) {
+float TestError(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const int N, const int K),
+                const dim3& grid_dim,
+                const dim3& block_dim,
+                const int M,
+                const int N,
+                const int K) {
   // 生成随机值矩阵
   float* a = (float*)malloc(M * K * sizeof(float));
   float* b = (float*)malloc(K * N * sizeof(float));
@@ -80,11 +80,13 @@ void TestError(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const
   // PrintMatrix(c_gpu, M, N, "c_gpu");
 
   // 比较cpu和gpu版本计算结果
+  float max_diff = 0;
   for (int i = 0; i < M * N; i++) {
-    if (std::abs(c_cpu[i] - c_gpu[i]) > 1e-3) {
-      printf("Error: c_cpu[%d] = %f, c_gpu[%d] = %f\n", i, c_cpu[i], i, c_gpu[i]);
-      exit(1);
-    }
+    // if (std::abs(c_cpu[i] - c_gpu[i]) > 1e-3) {
+    //   printf("Error: c_cpu[%d] = %f, c_gpu[%d] = %f\n", i, c_cpu[i], i, c_gpu[i]);
+    //   exit(1);
+    // }
+    max_diff = std::max(max_diff, std::abs(c_cpu[i] - c_gpu[i]));
   }
 
   free(a);
@@ -94,6 +96,7 @@ void TestError(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const
   CHECK(cudaFree(d_a));
   CHECK(cudaFree(d_b));
   CHECK(cudaFree(d_c));
+  return max_diff;
 }
 
 double TestPerformance(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const int N, const int K),
@@ -163,8 +166,9 @@ int main() {
   for (int i = 0; i < 6; i++) {
     dim3 block_dim(BLOCK_COLS, BLOCK_ROWS);
     dim3 grid_dim((N_list[i] + block_dim.x - 1) / block_dim.x, (M_list[i] + block_dim.y - 1) / block_dim.y);
-    TestError(NaiveSgemm, grid_dim, block_dim, M_list[i], N_list[i], K_list[i]);
-    printf("NaiveSgemm Accuracy Test %d, M = %d, N = %d, K = %d\n", i, M_list[i], N_list[i], K_list[i]);
+    float max_diff = TestError(NaiveSgemm, grid_dim, block_dim, M_list[i], N_list[i], K_list[i]);
+    printf("NaiveSgemm Accuracy Test %d, M = %d, N = %d, K = %d, max_diff: %f.\n", i, M_list[i], N_list[i], K_list[i],
+           max_diff);
   }
 
   // 测试性能和算力

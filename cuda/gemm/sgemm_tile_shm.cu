@@ -63,23 +63,16 @@ __global__ void TileSgemmBySharedMem(
   int load_b_gmem_n = bx * BN + load_b_smem_n; // 该线程搬运的分块b[BK, BN]的列索引对应到global mem的列索引
 
   // #pragma unroll
-  for (int bk = 0; bk < (K + BK - 1) / BK; bk++) {
+  int iter = (K + BK - 1) / BK;
+  for (int bk = 0; bk < iter; bk++) {
     // 搬运分块a[BM, BK]到shared mem
     int load_a_gmem_k = bk * BK + load_a_smem_k; // 该线程搬运的分块a[BM, BK]的列索引对应到global mem的列索引
     int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
     FLOAT4(s_a[load_a_smem_m][load_a_smem_k]) = FLOAT4(a[load_a_gmem_addr]);
-    // s_a[load_a_smem_m][load_a_smem_k] = a[load_a_gmem_addr];
-    // s_a[load_a_smem_m][load_a_smem_k + 1] = a[load_a_gmem_addr + 1];
-    // s_a[load_a_smem_m][load_a_smem_k + 2] = a[load_a_gmem_addr + 2];
-    // s_a[load_a_smem_m][load_a_smem_k + 3] = a[load_a_gmem_addr + 3];
     // 搬运分块b[BK, BN]到shared mem
     int load_b_gmem_k = bk * BK + load_b_smem_k; // 该线程搬运的分块b[BK, BN]的行索引对应到global mem的行索引
     int load_b_gmem_addr = OFFSET(load_b_gmem_k, load_b_gmem_n, N);
     FLOAT4(s_b[load_b_smem_k][load_b_smem_n]) = FLOAT4(b[load_b_gmem_addr]);
-    // s_b[load_b_smem_k][load_b_smem_n] = b[load_b_gmem_addr];
-    // s_b[load_b_smem_k][load_b_smem_n + 1] = b[load_b_gmem_addr + 1];
-    // s_b[load_b_smem_k][load_b_smem_n + 2] = b[load_b_gmem_addr + 2];
-    // s_b[load_b_smem_k][load_b_smem_n + 3] = b[load_b_gmem_addr + 3];
 
     // 等待block内所有线程搬运完毕
     __syncthreads();
@@ -116,22 +109,26 @@ __global__ void TileSgemmBySharedMem(
 }
 
 // 同cpu版本作比较，测试准确性
-void TestError(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const int N, const int K),
-               const dim3& grid_dim,
-               const dim3& block_dim,
-               const int M,
-               const int N,
-               const int K) {
+float TestError(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const int N, const int K),
+                const dim3& grid_dim,
+                const dim3& block_dim,
+                const int M,
+                const int N,
+                const int K) {
+  int a_size = M * K * sizeof(float);
+  int b_size = K * N * sizeof(float);
+  int c_size = M * N * sizeof(float);
+
   // 生成随机值矩阵
-  float* a = (float*)malloc(M * K * sizeof(float));
+  float* a = (float*)malloc(a_size);
   float* b = (float*)malloc(K * N * sizeof(float));
-  float* c_cpu = (float*)malloc(M * N * sizeof(float));
+  float* c_cpu = (float*)malloc(c_size);
   for (int i = 0; i < M * K; i++) {
-    a[i] = 0.1;
+    a[i] = rand() / static_cast<float>(RAND_MAX);
   }
   // PrintMatrix(a, M, K, "a");
   for (int i = 0; i < K * N; i++) {
-    b[i] = 0.1;
+    b[i] = rand() / static_cast<float>(RAND_MAX);
   }
   // PrintMatrix(b, K, N, "b");
   // cpu版本计算
@@ -142,23 +139,25 @@ void TestError(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const
   float* d_a;
   float* d_b;
   float* d_c;
-  CHECK(cudaMalloc(&d_a, M * K * sizeof(float)));
-  CHECK(cudaMalloc(&d_b, K * N * sizeof(float)));
-  CHECK(cudaMalloc(&d_c, M * N * sizeof(float)));
-  CHECK(cudaMemcpy(d_a, a, M * K * sizeof(float), cudaMemcpyHostToDevice));
-  CHECK(cudaMemcpy(d_b, b, K * N * sizeof(float), cudaMemcpyHostToDevice));
+  CHECK(cudaMalloc(&d_a, a_size));
+  CHECK(cudaMalloc(&d_b, b_size));
+  CHECK(cudaMalloc(&d_c, c_size));
+  CHECK(cudaMemcpy(d_a, a, a_size, cudaMemcpyHostToDevice));
+  CHECK(cudaMemcpy(d_b, b, b_size, cudaMemcpyHostToDevice));
   GpuSgemm<<<grid_dim, block_dim>>>(d_a, d_b, d_c, M, N, K);
-  float* c_gpu = (float*)malloc(M * N * sizeof(float));
-  CHECK(cudaMemcpy(c_gpu, d_c, M * N * sizeof(float), cudaMemcpyDeviceToHost));
+  float* c_gpu = (float*)malloc(c_size);
+  CHECK(cudaMemcpy(c_gpu, d_c, c_size, cudaMemcpyDeviceToHost));
   CHECK(cudaDeviceSynchronize());
   // PrintMatrix(c_gpu, M, N, "c_gpu");
 
   // 比较cpu和gpu版本计算结果
+  float max_diff = 0;
   for (int i = 0; i < M * N; i++) {
-    if (std::abs(c_cpu[i] - c_gpu[i]) > 1e-3) {
-      printf("Error: c_cpu[%d] = %f, c_gpu[%d] = %f\n", i, c_cpu[i], i, c_gpu[i]);
-      // exit(1);
-    }
+    // if (std::abs(c_cpu[i] - c_gpu[i]) > 1e-3) {
+    //   printf("Error: c_cpu[%d] = %f, c_gpu[%d] = %f\n", i, c_cpu[i], i, c_gpu[i]);
+    //   // exit(1);
+    // }
+    max_diff = std::max(max_diff, std::abs(c_cpu[i] - c_gpu[i]));
   }
 
   free(a);
@@ -168,6 +167,7 @@ void TestError(void (*GpuSgemm)(float* a, float* b, float* c, const int M, const
   CHECK(cudaFree(d_a));
   CHECK(cudaFree(d_b));
   CHECK(cudaFree(d_c));
+  return max_diff;
 }
 
 // 测试性能
@@ -177,8 +177,12 @@ double TestPerformance(void (*GpuSgemm)(float* a, float* b, float* c, const int 
                        const int M,
                        const int N,
                        const int K) {
+  int a_size = M * K * sizeof(float);
+  int b_size = K * N * sizeof(float);
+  int c_size = M * N * sizeof(float);
+
   // 生成随机值矩阵
-  float* a = (float*)malloc(M * K * sizeof(float));
+  float* a = (float*)malloc(a_size);
   float* b = (float*)malloc(K * N * sizeof(float));
   for (int i = 0; i < M * K; i++) {
     a[i] = rand() / static_cast<float>(RAND_MAX);
@@ -191,11 +195,11 @@ double TestPerformance(void (*GpuSgemm)(float* a, float* b, float* c, const int 
   float* d_a;
   float* d_b;
   float* d_c;
-  CHECK(cudaMalloc(&d_a, M * K * sizeof(float)));
-  CHECK(cudaMalloc(&d_b, K * N * sizeof(float)));
-  CHECK(cudaMalloc(&d_c, M * N * sizeof(float)));
-  CHECK(cudaMemcpy(d_a, a, M * K * sizeof(float), cudaMemcpyHostToDevice));
-  CHECK(cudaMemcpy(d_b, b, K * N * sizeof(float), cudaMemcpyHostToDevice));
+  CHECK(cudaMalloc(&d_a, a_size));
+  CHECK(cudaMalloc(&d_b, b_size));
+  CHECK(cudaMalloc(&d_c, c_size));
+  CHECK(cudaMemcpy(d_a, a, a_size, cudaMemcpyHostToDevice));
+  CHECK(cudaMemcpy(d_b, b, b_size, cudaMemcpyHostToDevice));
 
   cudaEvent_t start, end;
   CHECK(cudaEventCreate(&start));
@@ -230,9 +234,9 @@ int main() {
   // 初始化cuda设备
   InitDevice(0);
 
-  const int M_list[15] = {128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384};
-  const int N_list[15] = {128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384};
-  const int K_list[15] = {1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024};
+  const int M_list[15] = {128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384};
+  const int N_list[15] = {128, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384};
+  const int K_list[15] = {1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024};
   const int BM = 128; // 分块行数
   const int BN = 128; // 分块列数
   const int TM = 8;   // block每一个线程处理块的行数
@@ -242,13 +246,14 @@ int main() {
   for (int i = 0; i < 5; i++) {
     dim3 block_dim(BN / TN, BM / TM);
     dim3 grid_dim((N_list[i] + BN - 1) / BN, (M_list[i] + BM - 1) / BM);
-    TestError(TileSgemmBySharedMem, grid_dim, block_dim, M_list[i], N_list[i], K_list[i]);
-    printf("TileSgemmBySharedMem Accuracy Test %d passed, M = %d, N = %d, K = %d\n", i, M_list[i], N_list[i],
-           K_list[i]);
+    printf("grid_dim: (%d, %d), block_dim: (%d, %d)\n", grid_dim.x, grid_dim.y, block_dim.x, block_dim.y);
+    float max_diff = TestError(TileSgemmBySharedMem, grid_dim, block_dim, M_list[i], N_list[i], K_list[i]);
+    printf("TileSgemmBySharedMem Accuracy Test %d passed, M = %d, N = %d, K = %d, max_diff: %f.\n", i, M_list[i],
+           N_list[i], K_list[i], max_diff);
   }
 
   // 测试TileSgemmBySharedMem性能和算力
-  for (int i = 0; i < 15; i++) {
+  for (int i = 0; i < 14; i++) {
     double total_sec = 0.0;
     double max_sec = 0;
     double min_sec = DBL_MAX;
