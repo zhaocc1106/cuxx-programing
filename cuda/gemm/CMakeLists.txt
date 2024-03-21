@@ -64,3 +64,8 @@ ADD_EXECUTABLE(sgemm_tile_shm sgemm_tile_shm.cu cuda_common.h)
 
 SET_TARGET_PROPERTIES(sgemm_tile_shm PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 TARGET_LINK_LIBRARIES(sgemm_tile_shm ${CUDA_LIBRARIES})
+
+ADD_EXECUTABLE(sgemm_tile_shm_v2 sgemm_tile_shm_v2.cu cuda_common.h)
+
+SET_TARGET_PROPERTIES(sgemm_tile_shm_v2 PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+TARGET_LINK_LIBRARIES(sgemm_tile_shm_v2 ${CUDA_LIBRARIES})

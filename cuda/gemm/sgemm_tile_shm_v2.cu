@@ -1,5 +1,5 @@
 //
-// 通过shared mem + 分块矩阵乘法实现更高性能的sgemm
+// 在sgemm_tile_shm基础上进行bank conflict缓解优化
 //
 
 #include <cuda_runtime.h>
@@ -28,7 +28,7 @@ void CpuSgemm(float* a, float* b, float* c, const int M, const int N, const int 
 }
 
 // 通过shared mem实现分块矩阵乘法，每次核函数调用计算目标矩阵的一个分块
-__global__ void TileSgemmBySharedMem(
+__global__ void TileSgemmBySharedMemV2(
   float* __restrict__ a, float* __restrict__ b, float* __restrict__ c, const int M, const int N, const int K) {
   const int BM = 128; // 分块行数
   const int BN = 128; // 分块列数
@@ -44,9 +44,11 @@ __global__ void TileSgemmBySharedMem(
   const int ty = threadIdx.y;           // block内的线程行索引
   const int tid = ty * blockDim.x + tx; // block内的线程索引
 
-  __shared__ float s_a[BM][BK]; // 使用shared mem存储分块a[BM, BK]
+  __shared__ float s_a[BK][BM]; // 使用shared mem存储分块a[BM, BK]，通过列优先存储，方便提取列向量
   __shared__ float s_b[BK][BN]; // 使用shared mem存储分块b[BK, BN]
 
+  float r_comp_a[TM];      // 用于计算分块c[TM, TN]的a矩阵的元素
+  float r_comp_b[TN];      // 用于计算分块c[TM, TN]的b矩阵的元素
   float r_c[TM][TN] = {0}; // 使用寄存器存储分块c[TM, TN]，每个线程负责计算分块c[TM, TN]的元素
 
   // block内的线程数 = (BM * BN) / (TM * TN) = 256
@@ -67,7 +69,11 @@ __global__ void TileSgemmBySharedMem(
     // 搬运分块a[BM, BK]到shared mem
     int load_a_gmem_k = bk * BK + load_a_smem_k; // 该线程搬运的分块a[BM, BK]的列索引对应到global mem的列索引
     int load_a_gmem_addr = OFFSET(load_a_gmem_m, load_a_gmem_k, K);
-    FLOAT4(s_a[load_a_smem_m][load_a_smem_k]) = FLOAT4(a[load_a_gmem_addr]);
+    // 列优先存储，方便提取列向量
+    s_a[load_a_smem_k][load_a_smem_m] = a[load_a_gmem_addr];
+    s_a[load_a_smem_k + 1][load_a_smem_m] = a[load_a_gmem_addr + 1];
+    s_a[load_a_smem_k + 2][load_a_smem_m] = a[load_a_gmem_addr + 2];
+    s_a[load_a_smem_k + 3][load_a_smem_m] = a[load_a_gmem_addr + 3];
     // 搬运分块b[BK, BN]到shared mem
     int load_b_gmem_k = bk * BK + load_b_smem_k; // 该线程搬运的分块b[BK, BN]的行索引对应到global mem的行索引
     int load_b_gmem_addr = OFFSET(load_b_gmem_k, load_b_gmem_n, N);
@@ -78,14 +84,16 @@ __global__ void TileSgemmBySharedMem(
 
 #pragma unroll
     for (int k = 0; k < BK; k++) {
+      // 通过均分A[BK, BM]和B[BN, BK]访问shared mem的方式，减少bank conflict
+      FLOAT4(r_comp_a[0]) = FLOAT4(s_a[k][ty * TM / 2]);
+      FLOAT4(r_comp_a[4]) = FLOAT4(s_a[k][ty * TM / 2 + BM / 2]);
+      FLOAT4(r_comp_b[0]) = FLOAT4(s_b[k][tx * TN / 2]);
+      FLOAT4(r_comp_b[4]) = FLOAT4(s_b[k][tx * TN / 2 + BN / 2]);
 #pragma unroll
       for (int m = 0; m < TM; m++) { // 对于分块c[TM, TN]的每一行
 #pragma unroll
         for (int n = 0; n < TN; n++) { // 对于分块c[TM, TN]的每一列
-          // 计算c[TM, TN]的[m][n]元素
-          int s_a_m = ty * TM + m; // 用于计算[m][n]元素对应到shared mem的s_a的行索引
-          int s_b_n = tx * TN + n; // 用于计算[m][n]元素对应到shared mem的s_b的列索引
-          r_c[m][n] += s_a[s_a_m][k] * s_b[k][s_b_n];
+          r_c[m][n] += r_comp_a[m] * r_comp_b[n];
         }
       }
     }
@@ -96,14 +104,19 @@ __global__ void TileSgemmBySharedMem(
 
 // 将分块c[TM, TN]的结果写回到global mem
 #pragma unroll
-  for (int m = 0; m < TM; m++) {
-    int store_c_gmem_m = by * BM + ty * TM + m; // 该线程计算的分块c[TM, TN]的行索引对应到global mem的行索引
-                                                // #pragma unroll
-    for (int n = 0; n < TN; n += 4) {
-      int store_c_gmem_n = bx * BN + tx * TN + n; // 该线程计算的分块c[TM, TN]的列索引对应到global mem的列索引
-      int store_c_gmem_addr = OFFSET(store_c_gmem_m, store_c_gmem_n, N);
-      FLOAT4(c[store_c_gmem_addr]) = FLOAT4(r_c[m][n]);
-    }
+  for (int m = 0; m < TM / 2; m++) {
+    int store_c_gmem_m = by * BM + ty * TM / 2 + m;
+    int store_c_gmem_n = bx * BN + tx * TN / 2;
+    int store_c_gmem_addr = OFFSET(store_c_gmem_m, store_c_gmem_n, N);
+    FLOAT4(c[store_c_gmem_addr]) = FLOAT4(r_c[m][0]);
+    FLOAT4(c[store_c_gmem_addr + BN / 2]) = FLOAT4(r_c[m][4]);
+  }
+  for (int m = 0; m < TM / 2; m++) {
+    int store_c_gmem_m = by * BM + ty * TM / 2 + m + BM / 2;
+    int store_c_gmem_n = bx * BN + tx * TN / 2;
+    int store_c_gmem_addr = OFFSET(store_c_gmem_m, store_c_gmem_n, N);
+    FLOAT4(c[store_c_gmem_addr]) = FLOAT4(r_c[m + TM / 2][0]);
+    FLOAT4(c[store_c_gmem_addr + BN / 2]) = FLOAT4(r_c[m + TM / 2][4]);
   }
 }
 
@@ -263,8 +276,8 @@ int main() {
     dim3 block_dim(BN / TN, BM / TM);
     dim3 grid_dim((N_list[i] + BN - 1) / BN, (M_list[i] + BM - 1) / BM);
     printf("grid_dim: (%d, %d), block_dim: (%d, %d)\n", grid_dim.x, grid_dim.y, block_dim.x, block_dim.y);
-    float max_diff = TestError(TileSgemmBySharedMem, grid_dim, block_dim, M_list[i], N_list[i], K_list[i]);
-    printf("TileSgemmBySharedMem Accuracy Test %d passed, M = %d, N = %d, K = %d, max_diff: %f.\n", i, M_list[i],
+    float max_diff = TestError(TileSgemmBySharedMemV2, grid_dim, block_dim, M_list[i], N_list[i], K_list[i]);
+    printf("TileSgemmBySharedMemV2 Accuracy Test %d passed, M = %d, N = %d, K = %d, max_diff: %f.\n", i, M_list[i],
            N_list[i], K_list[i], max_diff);
   }
 
@@ -277,7 +290,7 @@ int main() {
     for (int j = 0; j < repeat; j++) {
       dim3 block_dim(BN / TN, BM / TM);
       dim3 grid_dim((N_list[i] + BN - 1) / BN, (M_list[i] + BM - 1) / BM);
-      double sec = TestPerformance(TileSgemmBySharedMem, grid_dim, block_dim, M_list[i], N_list[i], K_list[i]);
+      double sec = TestPerformance(TileSgemmBySharedMemV2, grid_dim, block_dim, M_list[i], N_list[i], K_list[i]);
       total_sec += sec;
       max_sec = std::max(max_sec, sec);
       min_sec = std::min(min_sec, sec);
@@ -285,7 +298,7 @@ int main() {
     double avg_sec = total_sec / repeat;
     double gflops = double(2) * M_list[i] * N_list[i] * K_list[i] / avg_sec / 1024 / 1024 / 1024;
     printf(
-      "TileSgemmBySharedMem Performance Test %d, M = %d, N = %d, K = %d, time = %.6f %.6f %.6f sec, gflops = %.6f "
+      "TileSgemmBySharedMemV2 Performance Test %d, M = %d, N = %d, K = %d, time = %.6f %.6f %.6f sec, gflops = %.6f "
       "GFLOPS\n",
       i, M_list[i], N_list[i], K_list[i], min_sec, avg_sec, max_sec, gflops);
   }
