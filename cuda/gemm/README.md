@@ -54,7 +54,6 @@ TileSgemmBySharedMem Performance Test 13, M = 16384, N = 16384, K = 1024, time =
 在sgemm_tile_shm基础上进行bank conflict缓解优化
 
 ```
-TileSgemmBySharedMemV2 Accuracy Test 4 passed, M = 768, N = 768, K = 1024, max_diff: 0.000092.
 TileSgemmBySharedMemV2 Performance Test 0, M = 128, N = 128, K = 1024, time = 0.000212 0.000214 0.000216 sec, gflops = 146.358508 GFLOPS
 TileSgemmBySharedMemV2 Performance Test 1, M = 256, N = 256, K = 1024, time = 0.000215 0.000216 0.000219 sec, gflops = 579.149860 GFLOPS
 TileSgemmBySharedMemV2 Performance Test 2, M = 384, N = 384, K = 1024, time = 0.000233 0.000235 0.000236 sec, gflops = 1196.441962 GFLOPS
@@ -90,4 +89,46 @@ TileSgemmBySharedMemV3 Performance Test 10, M = 6144, N = 6144, K = 1024, time =
 TileSgemmBySharedMemV3 Performance Test 11, M = 8192, N = 8192, K = 1024, time = 0.014763 0.014782 0.014799 sec, gflops = 8658.949383 GFLOPS
 TileSgemmBySharedMemV3 Performance Test 12, M = 12288, N = 12288, K = 1024, time = 0.033140 0.033152 0.033170 sec, gflops = 8687.196600 GFLOPS
 TileSgemmBySharedMemV3 Performance Test 13, M = 16384, N = 16384, K = 1024, time = 0.047828 0.052743 0.058876 sec, gflops = 9707.467860 GFLOPS
+```
+
+## sgemm_cublas
+
+测试cublas sgemm性能
+
+```
+Cublas Performance Test 0, M = 128, N = 128, K = 1024, time = 0.000330 0.000336 0.000348 sec, gflops = 93.128351 GFLOPS
+Cublas Performance Test 1, M = 256, N = 256, K = 1024, time = 0.000336 0.000342 0.000350 sec, gflops = 365.801705 GFLOPS
+Cublas Performance Test 2, M = 384, N = 384, K = 1024, time = 0.000369 0.000374 0.000378 sec, gflops = 751.625920 GFLOPS
+Cublas Performance Test 3, M = 512, N = 512, K = 1024, time = 0.000410 0.000411 0.000412 sec, gflops = 1217.241590 GFLOPS
+Cublas Performance Test 4, M = 768, N = 768, K = 1024, time = 0.000691 0.000694 0.000698 sec, gflops = 1620.521874 GFLOPS
+Cublas Performance Test 5, M = 1024, N = 1024, K = 1024, time = 0.000797 0.000804 0.000817 sec, gflops = 2486.038385 GFLOPS
+Cublas Performance Test 6, M = 1536, N = 1536, K = 1024, time = 0.001137 0.001182 0.001339 sec, gflops = 3806.477949 GFLOPS
+Cublas Performance Test 7, M = 2048, N = 2048, K = 1024, time = 0.001556 0.001563 0.001572 sec, gflops = 5118.210235 GFLOPS
+Cublas Performance Test 8, M = 3072, N = 3072, K = 1024, time = 0.002846 0.002920 0.002999 sec, gflops = 6164.370012 GFLOPS
+Cublas Performance Test 9, M = 4096, N = 4096, K = 1024, time = 0.004581 0.004618 0.004680 sec, gflops = 6929.805326 GFLOPS
+Cublas Performance Test 10, M = 6144, N = 6144, K = 1024, time = 0.009541 0.009560 0.009594 sec, gflops = 7531.663225 GFLOPS
+Cublas Performance Test 11, M = 8192, N = 8192, K = 1024, time = 0.016355 0.016442 0.016572 sec, gflops = 7784.763729 GFLOPS
+Cublas Performance Test 12, M = 12288, N = 12288, K = 1024, time = 0.035799 0.035882 0.036014 sec, gflops = 8026.270576 GFLOPS
+Cublas Performance Test 13, M = 16384, N = 16384, K = 1024, time = 0.051240 0.055886 0.063072 sec, gflops = 9161.465821 GFLOPS
+```
+
+## sgemm_cublasLt
+
+测试cublasLt sgemm性能
+
+```
+CublasLt Performance Test 0, M = 128, N = 128, K = 1024, time = 0.000077 0.000080 0.000088 sec, gflops = 388.542413 GFLOPS
+CublasLt Performance Test 1, M = 256, N = 256, K = 1024, time = 0.000084 0.000086 0.000087 sec, gflops = 1461.701067 GFLOPS
+CublasLt Performance Test 2, M = 384, N = 384, K = 1024, time = 0.000107 0.000110 0.000111 sec, gflops = 2563.006722 GFLOPS
+CublasLt Performance Test 3, M = 512, N = 512, K = 1024, time = 0.000133 0.000134 0.000135 sec, gflops = 3732.502050 GFLOPS
+CublasLt Performance Test 4, M = 768, N = 768, K = 1024, time = 0.000252 0.000253 0.000256 sec, gflops = 4449.932971 GFLOPS
+CublasLt Performance Test 5, M = 1024, N = 1024, K = 1024, time = 0.000342 0.000347 0.000364 sec, gflops = 5761.005875 GFLOPS
+CublasLt Performance Test 6, M = 1536, N = 1536, K = 1024, time = 0.000627 0.000630 0.000639 sec, gflops = 7142.022829 GFLOPS
+CublasLt Performance Test 7, M = 2048, N = 2048, K = 1024, time = 0.001017 0.001022 0.001025 sec, gflops = 7829.235179 GFLOPS
+CublasLt Performance Test 8, M = 3072, N = 3072, K = 1024, time = 0.002190 0.002194 0.002200 sec, gflops = 8202.578086 GFLOPS
+CublasLt Performance Test 9, M = 4096, N = 4096, K = 1024, time = 0.003777 0.003794 0.003842 sec, gflops = 8434.149455 GFLOPS
+CublasLt Performance Test 10, M = 6144, N = 6144, K = 1024, time = 0.008198 0.008266 0.008327 sec, gflops = 8710.403602 GFLOPS
+CublasLt Performance Test 11, M = 8192, N = 8192, K = 1024, time = 0.014505 0.014511 0.014519 sec, gflops = 8820.831268 GFLOPS
+CublasLt Performance Test 12, M = 12288, N = 12288, K = 1024, time = 0.032304 0.032351 0.032461 sec, gflops = 8902.411889 GFLOPS
+CublasLt Performance Test 13, M = 16384, N = 16384, K = 1024, time = 0.047572 0.051359 0.057362 sec, gflops = 9968.960520 GFLOPS
 ```
