@@ -8,7 +8,11 @@ cuda实现一些算子
 
 #### gemm
 
-实现不同版本的gemm并比较性能
+cuda实现不同版本的gemm并比较性能
+
+#### reduce
+
+cuda实现的reduce算法，包括sum、max、min、mean等。
 
 ## cublas
 
