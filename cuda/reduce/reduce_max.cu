@@ -1,8 +1,9 @@
-// 通过warp tile实现reduce sum.
+// 通过warp tile实现reduce max.
 
 #include <cuda_runtime.h>
 
 #include <cassert>
+#include <cfloat>
 #include <chrono>
 #include <iostream>
 
@@ -15,73 +16,71 @@
 #define BLOCK_DIM_X 1024
 
 template <typename T>
-__inline__ __device__ T WarpReduceSum(T val) {
+__inline__ __device__ T WarpReduceMax(T val) {
 #pragma unroll
   for (int offset = warpSize / 2; offset > 0; offset /= 2) {
-    val += __shfl_down_sync(0xffffffff, val, offset, warpSize);
-    // __shfl_xor_sync也可以完成相同动作
-    // val += __shfl_xor_sync(0xffffffff, val, offset, warpSize);
+    val = fmax(val, __shfl_down_sync(0xffffffff, val, offset, warpSize));
   }
   return val;
 }
 
 template <typename T>
-__inline__ __device__ T BlockReduceSum(T val, T* shared) {
+__inline__ __device__ T BlockReduceMax(T val, T* shared) {
   const int laneid = threadIdx.x % warpSize;
   const int warpid = threadIdx.x / warpSize;
-  val = WarpReduceSum(val);
+  val = WarpReduceMax(val);
   // __syncthreads();
   if (laneid == 0) {
     shared[warpid] = val;
   }
   __syncthreads();
-  val = (threadIdx.x < blockDim.x / warpSize) ? shared[laneid] : T(0);
+  val = (threadIdx.x < blockDim.x / warpSize) ? shared[laneid] : T(-DBL_MAX);
   if (warpid == 0) {
-    val = WarpReduceSum(val);
+    val = WarpReduceMax(val);
   }
   return val;
 }
 
 template <typename T>
-__global__ void ReduceSumV1(const T* __restrict__ input, T* __restrict__ output, const int N) {
+__global__ void ReduceMaxV1(const T* __restrict__ input, T* __restrict__ output, const int N) {
   __shared__ T shared[BLOCK_DIM_X / WARP_SIZE];
-  T sum = T(0);
+  T max = T(-DBL_MAX);
   // printf("blockDim.x: %d, gridDim.x: %d, i: %d, N: %d\n", blockDim.x, gridDim.x, blockIdx.x * blockDim.x +
   // threadIdx.x, N);
   for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < N; i += blockDim.x * gridDim.x) {
-    sum += input[i];
+    max = fmax(max, input[i]);
   }
-  sum = BlockReduceSum(sum, shared);
+  max = BlockReduceMax(max, shared);
   if (threadIdx.x == 0) {
-    output[blockIdx.x] = sum;
+    output[blockIdx.x] = max;
   }
 }
 
 template <typename T>
-__global__ void ReduceSumV2(const T* __restrict__ input, T* __restrict__ output, const int N) {
+__global__ void ReduceMaxV2(const T* __restrict__ input, T* __restrict__ output, const int N) {
   auto bucket_size = (N + blockDim.x - 1) / blockDim.x;
   __shared__ T shared[BLOCK_DIM_X];
   auto begin = threadIdx.x * bucket_size;
   auto end = min(begin + bucket_size, N);
 
-  T sum = T(0);
+  T max = T(-DBL_MAX);
   for (int i = begin; i < end; i++) {
-    sum += input[i];
+    max = fmax(max, input[i]);
   }
-  shared[threadIdx.x] = sum;
+  shared[threadIdx.x] = max;
   __syncthreads();
 
   if (threadIdx.x == 0) {
-    T block_sum = T(0);
+    T block_max = T(-DBL_MAX);
     for (int i = 0; i < blockDim.x; i++) {
-      block_sum += shared[i];
+      block_max = fmax(block_max, shared[i]);
     }
-    output[0] = block_sum;
+    output[0] = block_max;
   }
 }
 
 template <typename T>
-void TestReduceSum(const long long N) {
+void TestReduceMax(const long long N) {
   T* input = (T*)malloc(N * sizeof(T));
   T* output = (T*)malloc(1 * sizeof(T));
   T* d_input;
@@ -91,38 +90,38 @@ void TestReduceSum(const long long N) {
 
   for (int i = 0; i < 10; i++) {
     for (int j = 0; j < N; j++) {
-      input[j] = rand() / static_cast<T>(RAND_MAX);
+      input[j] = T(rand());
     }
 
     auto cpu_begin_us = GET_TIME_US();
-    T sum = 0;
+    T max = 0;
     for (int j = 0; j < N; j++) {
-      sum += input[j];
+      max = std::max(max, input[j]);
     }
     auto cpu_end_us = GET_TIME_US();
-    std::cout << "cpu ReduceSum: " << sum << ", time: " << cpu_end_us - cpu_begin_us << " us" << std::endl;
+    std::cout << "cpu ReduceMax: " << max << ", time: " << cpu_end_us - cpu_begin_us << " us" << std::endl;
 
     auto gpu_begin_us = GET_TIME_US();
     CHECK(cudaMemcpy(d_input, input, N * sizeof(T), cudaMemcpyHostToDevice));
-    ReduceSumV1<<<1, BLOCK_DIM_X>>>(d_input, d_output, N);
+    ReduceMaxV1<<<1, BLOCK_DIM_X>>>(d_input, d_output, N);
     CHECK(cudaMemcpy(output, d_output, 1 * sizeof(T), cudaMemcpyDeviceToHost));
     auto gpu_end_us = GET_TIME_US();
-    if (abs(output[0] - sum) > 1e-3) {
-      std::cout << "ReduceSumV1 error, " << output[0] << ", " << sum << std::endl;
+    if (abs(output[0] - max) > 1e-3) {
+      std::cout << "ReduceMaxV1 error, " << output[0] << ", " << max << std::endl;
       exit(1);
     }
-    std::cout << "gpu ReduceSumV1: " << output[0] << ", time: " << gpu_end_us - gpu_begin_us << " us" << std::endl;
+    std::cout << "gpu ReduceMaxV1: " << output[0] << ", time: " << gpu_end_us - gpu_begin_us << " us" << std::endl;
 
     gpu_begin_us = GET_TIME_US();
     CHECK(cudaMemcpy(d_input, input, N * sizeof(T), cudaMemcpyHostToDevice));
-    ReduceSumV2<<<1, 256>>>(d_input, d_output, N);
+    ReduceMaxV2<<<1, 256>>>(d_input, d_output, N);
     CHECK(cudaMemcpy(output, d_output, 1 * sizeof(T), cudaMemcpyDeviceToHost));
     gpu_end_us = GET_TIME_US();
-    if (abs(output[0] - sum) > 1e-3) {
-      std::cout << "ReduceSumV2 error" << std::endl;
+    if (abs(output[0] - max) > 1e-3) {
+      std::cout << "ReduceMaxV2 error" << std::endl;
       exit(1);
     }
-    std::cout << "gpu ReduceSumV2: " << output[0] << ", time: " << gpu_end_us - gpu_begin_us << " us" << std::endl;
+    std::cout << "gpu ReduceMaxV2: " << output[0] << ", time: " << gpu_end_us - gpu_begin_us << " us" << std::endl;
 
     std::cout << std::endl;
   }
@@ -135,6 +134,6 @@ void TestReduceSum(const long long N) {
 int main() {
   InitDevice(0);
 
-  TestReduceSum<double>(1 << 20);
+  TestReduceMax<double>(1 << 20);
   return 0;
 }

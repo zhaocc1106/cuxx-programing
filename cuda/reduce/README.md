@@ -5,3 +5,7 @@
 ## reduce_sum.cu
 
 通过warp tile实现的block reduce sum算法。
+
+## reduce_max.cu
+
+通过warp tile实现的block reduce max算法。
