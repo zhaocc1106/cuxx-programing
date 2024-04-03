@@ -86,7 +86,7 @@ void TestReduceMax(const long long N) {
   T* d_input;
   T* d_output;
   CHECK(cudaMalloc(&d_input, N * sizeof(T)));
-  CHECK(cudaMalloc(&d_output, N * sizeof(T)));
+  CHECK(cudaMalloc(&d_output, 1 * sizeof(T)));
 
   for (int i = 0; i < 10; i++) {
     for (int j = 0; j < N; j++) {
@@ -103,6 +103,7 @@ void TestReduceMax(const long long N) {
 
     auto gpu_begin_us = GET_TIME_US();
     CHECK(cudaMemcpy(d_input, input, N * sizeof(T), cudaMemcpyHostToDevice));
+    CHECK(cudaMemset(d_output, 0, 1 * sizeof(T)));
     ReduceMaxV1<<<1, BLOCK_DIM_X>>>(d_input, d_output, N);
     CHECK(cudaMemcpy(output, d_output, 1 * sizeof(T), cudaMemcpyDeviceToHost));
     auto gpu_end_us = GET_TIME_US();
@@ -114,6 +115,7 @@ void TestReduceMax(const long long N) {
 
     gpu_begin_us = GET_TIME_US();
     CHECK(cudaMemcpy(d_input, input, N * sizeof(T), cudaMemcpyHostToDevice));
+    CHECK(cudaMemset(d_output, 0, 1 * sizeof(T)));
     ReduceMaxV2<<<1, 256>>>(d_input, d_output, N);
     CHECK(cudaMemcpy(output, d_output, 1 * sizeof(T), cudaMemcpyDeviceToHost));
     gpu_end_us = GET_TIME_US();
@@ -123,7 +125,7 @@ void TestReduceMax(const long long N) {
     }
     std::cout << "gpu ReduceMaxV2: " << output[0] << ", time: " << gpu_end_us - gpu_begin_us << " us" << std::endl;
 
-    std::cout << std::endl;
+    std::cout << "--------" << std::endl;
   }
   CHECK(cudaFree(d_input));
   CHECK(cudaFree(d_output));
