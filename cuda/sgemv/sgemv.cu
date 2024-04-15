@@ -25,8 +25,7 @@ __inline__ __device__ T WarpReduceSum(T val) {
 // 矩阵A的大小为m * n, 向量x的大小为n, 向量y的大小为m
 // 假设n为32的倍数，通过warp分块实现sgemv， 每一个warp处理矩阵一行
 // blockDim.x = 32, blockDim.y = 4
-__global__ void SgemvN32(
-  const float* __restrict__ A, const float* __restrict__ x, float* __restrict__ y, int M, int N) {
+__global__ void SgemvN32(float* __restrict__ A, float* __restrict__ x, float* __restrict__ y, int M, int N) {
   auto tx = threadIdx.x;    // 0 ~ 31
   auto ty = threadIdx.y;    // 0 ~ 4
   auto bx = blockIdx.x;     // 0 ~ m / 32
@@ -83,6 +82,59 @@ __global__ void SgemvN128(float* __restrict__ A, float* __restrict__ x, float* _
   }
 }
 
+template <typename T>
+__inline__ __device__ T HalfWarpReduceSum(T val) {
+#pragma unroll
+  for (int offset = warpSize / 4; offset > 0; offset /= 2) {
+    val += __shfl_down_sync(0xffffffff, val, offset, warpSize);
+  }
+  return val;
+}
+
+// 矩阵A * 向量x = 向量y
+// 矩阵A的大小为m * n, 向量x的大小为n, 向量y的大小为m
+// 假设n为16的倍数，通过warp分块实现sgemv， 每一个warp处理矩阵两行
+// blockDim.x = 32, blockDim.y = 4
+__global__ void SgemvN16(float* __restrict__ A, float* __restrict__ x, float* __restrict__ y, int M, int N) {
+  auto tx = threadIdx.x;     // 0 ~ 31
+  auto ty = threadIdx.y;     // 0 ~ 4
+  auto bx = blockIdx.x;      // 0 ~ m / 32
+  auto lane = tx % warpSize; // 0 ~ 31
+
+  auto m = (bx * blockDim.y + ty) * 2; // 当前处理的行号
+  if (m >= M) {
+    return;
+  }
+
+  float sum = 0;
+  const auto half_warp = warpSize / 2;
+  auto n_warp = (N + half_warp - 1) / half_warp;
+  for (int i = 0; i < n_warp; ++i) {
+    if (lane < half_warp) {
+      auto idx = i * half_warp + lane;
+      if (idx < N) {
+        sum += A[m * N + idx] * x[idx];
+      }
+    } else {
+      auto idx = i * half_warp + lane - half_warp;
+      if (idx < N) {
+        sum += A[(m + 1) * N + idx] * x[idx];
+      }
+    }
+  }
+  if (lane < half_warp) {
+    sum = HalfWarpReduceSum(sum);
+    if (lane == 0) {
+      y[m] = sum;
+    }
+  } else {
+    sum = HalfWarpReduceSum(sum);
+    if (lane == half_warp) {
+      y[m + 1] = sum;
+    }
+  }
+}
+
 void SgemvCpu(const float* A, const float* x, float* y, int M, int N) {
   for (int i = 0; i < M; ++i) {
     y[i] = 0;
@@ -92,9 +144,9 @@ void SgemvCpu(const float* A, const float* x, float* y, int M, int N) {
   }
 }
 
+template <size_t N = 16>
 void Test() {
   int M = 1024;
-  int N = 1024;
   float* A = new float[M * N];
   float* A_lead_col = new float[M * N]; // 列式存储
   float* x = new float[N];
@@ -109,9 +161,19 @@ void Test() {
   CUDA_CHECK(cudaMalloc(&x_gpu, N * sizeof(float)));
   CUDA_CHECK(cudaMalloc(&y_gpu, M * sizeof(float)));
 
+  auto sgemv_fn = SgemvN16;
+  if (N == 32) {
+    sgemv_fn = SgemvN32;
+  } else if (N == 128) {
+    sgemv_fn = SgemvN128;
+  }
+
   cublasHandle_t handle;
   CUBLAS_CHECK(cublasCreate(&handle));
-  for (int repeat = 0; repeat < 10; repeat++) {
+  long long cpu_avg_time = 0;
+  long long sgemv_fn_avg_time = 0;
+  long long sgemv_cublas_avg_time = 0;
+  for (int repeat = 0; repeat < 11; repeat++) {
     for (int i = 0; i < M * N; ++i) {
       A[i] = rand() % 1000 / 1000.0f;
     }
@@ -128,39 +190,29 @@ void Test() {
     auto begin = GET_TIME_US();
     SgemvCpu(A, x, y_cpu, M, N);
     auto end = GET_TIME_US();
-    std::cout << "cpu time: " << end - begin << " us" << std::endl;
+    if (repeat > 0) {
+      cpu_avg_time += (end - begin);
+    }
 
-    memset(y, 0, M * sizeof(float));
-    begin = GET_TIME_US();
-    CUDA_CHECK(cudaMemcpy(A_gpu, A, M * N * sizeof(float), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMemcpy(x_gpu, x, N * sizeof(float), cudaMemcpyHostToDevice));
     dim3 block(32, 4);
     dim3 grid((M + 4 - 1) / 4, 1);
-    CUDA_CHECK(cudaMemset(y_gpu, 0, M * sizeof(float)));
-    SgemvN32<<<grid, block>>>(A_gpu, x_gpu, y_gpu, M, N);
-    CUDA_CHECK(cudaMemcpy(y, y_gpu, M * sizeof(float), cudaMemcpyDeviceToHost));
-    end = GET_TIME_US();
-    for (int i = 0; i < M; ++i) {
-      if (fabs(y[i] - y_cpu[i]) > 1e-3) {
-        std::cout << "SgemvN32 error at " << i << " " << y[i] << " " << y_cpu[i] << std::endl;
-      }
-    }
-    std::cout << "SgemvN32 time: " << end - begin << " us" << std::endl;
 
     memset(y, 0, M * sizeof(float));
     begin = GET_TIME_US();
     CUDA_CHECK(cudaMemcpy(A_gpu, A, M * N * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemcpy(x_gpu, x, N * sizeof(float), cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemset(y_gpu, 0, M * sizeof(float)));
-    SgemvN128<<<grid, block>>>(A_gpu, x_gpu, y_gpu, M, N);
+    sgemv_fn<<<grid, block>>>(A_gpu, x_gpu, y_gpu, M, N);
     CUDA_CHECK(cudaMemcpy(y, y_gpu, M * sizeof(float), cudaMemcpyDeviceToHost));
     end = GET_TIME_US();
     for (int i = 0; i < M; ++i) {
       if (fabs(y[i] - y_cpu[i]) > 1e-3) {
-        std::cout << "SgemvN128 error at " << i << " " << y[i] << " " << y_cpu[i] << std::endl;
+        std::cout << "sgemv_fn error at " << i << " " << y[i] << " " << y_cpu[i] << std::endl;
       }
     }
-    std::cout << "SgemvN128 time: " << end - begin << " us" << std::endl;
+    if (repeat > 0) {
+      sgemv_fn_avg_time += (end - begin);
+    }
 
     memset(y, 0, M * sizeof(float));
     begin = GET_TIME_US();
@@ -177,11 +229,15 @@ void Test() {
         std::cout << "SgemvCublas error at " << i << " " << y[i] << " " << y_cpu[i] << std::endl;
       }
     }
-    std::cout << "SgemvCublas time: " << end - begin << " us" << std::endl;
-
-    std::cout << "--------" << std::endl;
+    if (repeat > 0) {
+      sgemv_cublas_avg_time += (end - begin);
+    }
   }
   CUBLAS_CHECK(cublasDestroy(handle));
+
+  std::cout << "cpu avg time: " << float(cpu_avg_time) / 10.0 << " us, "
+            << "sgemv_fn avg time: " << float(sgemv_fn_avg_time) / 10.0 << " us, "
+            << "sgemv_cublas avg time: " << float(sgemv_cublas_avg_time) / 10.0 << " us" << std::endl;
 
   CUDA_CHECK(cudaFree(A_gpu));
   CUDA_CHECK(cudaFree(x_gpu));
@@ -194,6 +250,11 @@ void Test() {
 
 int main() {
   InitDevice(0);
-  Test();
+  std::cout << "N = 16" << std::endl;
+  Test<16>();
+  std::cout << "N = 32" << std::endl;
+  Test<32>();
+  std::cout << "N = 128" << std::endl;
+  Test<128>();
   return 0;
 }
