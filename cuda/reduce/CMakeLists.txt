@@ -25,6 +25,7 @@ IF (DEFINED GPU_ARCHS)
     SEPARATE_ARGUMENTS(GPU_ARCHS)
 ELSE ()
     LIST(APPEND GPU_ARCHS
+            37
             61
             70
             75
