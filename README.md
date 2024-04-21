@@ -1,6 +1,6 @@
 # cuxx-programing
 
-一些cuda库的样例，cuda、cublas、cublaslt、cusparse...
+cuda、cublas、cublaslt、cusparse...
 
 ## cuda
 
@@ -17,6 +17,10 @@ cuda实现的reduce算法，包括sum、max、min、mean等。
 #### sgemv
 
 cuda实现sgemv并比较并比较与cublas实现的性能。
+
+#### dot_product
+
+cuda实现dot_product并比较与cublas实现的性能。
 
 ## cublas
 
