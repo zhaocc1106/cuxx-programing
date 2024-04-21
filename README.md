@@ -11,6 +11,7 @@ cuda实现一些算子
 * sgemv：cuda实现sgemv并比较并比较与cublas实现的性能。
 * dot_product：cuda实现dot_product并比较与cublas实现的性能。
 * element_wise：cuda实现element_wise算子并比较与cublas实现的性能。
+* softmax：cuda实现softmax算子。
 
 ## cublas
 
