@@ -10,6 +10,7 @@ K80 + CUDA10
 
 ```
 N: 1048576
-SoftmaxCPU, time: 37753 us
-SoftmaxGPU, time: 1643 us
+SoftmaxCPU, time: 40481 us
+SoftmaxGPU, time: 1699 us
+SoftmaxFloat4GPU, time: 1609 us
 ```
