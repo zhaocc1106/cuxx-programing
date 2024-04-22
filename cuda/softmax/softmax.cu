@@ -50,9 +50,7 @@ __global__ void Softmax(float* __restrict__ a, float* __restrict__ b, float* __r
   }
 
   float exp_val = 0.0f;
-  if (idx < N) {
-    exp_val = expf(a[idx]);
-  }
+  exp_val = expf(a[idx]);
   float sum = BlockReduceSum(exp_val, shared);
   if (threadIdx.x == 0) {
     atomicAdd(total, sum);
@@ -63,6 +61,47 @@ __global__ void Softmax(float* __restrict__ a, float* __restrict__ b, float* __r
   // printf("idx: %d, total: %f\n", idx, *total);
   if (idx < N) {
     b[idx] = exp_val / (*total);
+  }
+}
+
+__global__ void SoftmaxFloat4(float* __restrict__ a, float* __restrict__ b, float* __restrict__ total, int N) {
+  __shared__ float shared[BLOCK_DIM_X / WARP_SIZE];
+  auto idx = (blockIdx.x * blockDim.x + threadIdx.x) * 4;
+  if (idx >= N) {
+    return;
+  }
+
+  float4 exp_val = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+  if (idx < N) {
+    exp_val.x = expf(a[idx]);
+  }
+  if (idx + 1 < N) {
+    exp_val.y = expf(a[idx + 1]);
+  }
+  if (idx + 2 < N) {
+    exp_val.z = expf(a[idx + 2]);
+  }
+  if (idx + 3 < N) {
+    exp_val.w = expf(a[idx + 3]);
+  }
+  float sum = BlockReduceSum(exp_val.x + exp_val.y + exp_val.z + exp_val.w, shared);
+  if (threadIdx.x == 0) {
+    atomicAdd(total, sum);
+  }
+
+  // 同步所有线程内存
+  __threadfence();
+  if (idx < N) {
+    b[idx] = exp_val.x / (*total);
+  }
+  if (idx + 1 < N) {
+    b[idx + 1] = exp_val.y / (*total);
+  }
+  if (idx + 2 < N) {
+    b[idx + 2] = exp_val.z / (*total);
+  }
+  if (idx + 3 < N) {
+    b[idx + 3] = exp_val.w / (*total);
   }
 }
 
@@ -112,7 +151,6 @@ void Test(int N) {
     CUDA_CHECK(cudaMemcpy(total_h, total_d, sizeof(float), cudaMemcpyDeviceToHost));
     end = GET_TIME_US();
     std::cout << "SoftmaxGPU, time: " << end - begin << " us" << std::endl;
-
     for (int j = 0; j < N; j++) {
       if (fabs(b[j] - b_h[j]) > 1e-5) {
         std::cout << "Error b[" << j << "]: " << b[j] << " " << b_h[j] << std::endl;
@@ -120,6 +158,27 @@ void Test(int N) {
       }
     }
     // std::cout << "total: " << *total << " " << *total_h << std::endl;
+    if (fabs(*total - *total_h) > 1e-3) {
+      std::cout << "Error total: " << *total << " " << *total_h << std::endl;
+      break;
+    }
+
+    begin = GET_TIME_US();
+    CUDA_CHECK(cudaMemcpy(a_d, a, N * sizeof(float), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemset(b_d, 0, N * sizeof(float)));
+    CUDA_CHECK(cudaMemset(total_d, 0, sizeof(float)));
+    auto block_dim_x = BLOCK_DIM_X / 4;
+    SoftmaxFloat4<<<(N + block_dim_x - 1) / block_dim_x, block_dim_x>>>(a_d, b_d, total_d, N);
+    CUDA_CHECK(cudaMemcpy(b_h, b_d, N * sizeof(float), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(total_h, total_d, sizeof(float), cudaMemcpyDeviceToHost));
+    end = GET_TIME_US();
+    std::cout << "SoftmaxFloat4GPU, time: " << end - begin << " us" << std::endl;
+    for (int j = 0; j < N; j++) {
+      if (fabs(b[j] - b_h[j]) > 1e-5) {
+        std::cout << "Error b[" << j << "]: " << b[j] << " " << b_h[j] << std::endl;
+        break;
+      }
+    }
     if (fabs(*total - *total_h) > 1e-3) {
       std::cout << "Error total: " << *total << " " << *total_h << std::endl;
       break;
