@@ -56,7 +56,7 @@ __global__ void Softmax(float* __restrict__ a, float* __restrict__ b, float* __r
     atomicAdd(total, sum);
   }
 
-  // 同步所有线程内存
+  // 通过内存屏障，使得之后的total读已经是之前的写入，保证所有线程都读取到total的值
   __threadfence();
   // printf("idx: %d, total: %f\n", idx, *total);
   if (idx < N) {
@@ -89,7 +89,7 @@ __global__ void SoftmaxFloat4(float* __restrict__ a, float* __restrict__ b, floa
     atomicAdd(total, sum);
   }
 
-  // 同步所有线程内存
+  // 通过内存屏障，使得之后的total读已经是之前的写入，保证所有线程都读取到total的值
   __threadfence();
   if (idx < N) {
     b[idx] = exp_val.x / (*total);
